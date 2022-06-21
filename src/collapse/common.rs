@@ -12,10 +12,16 @@ use once_cell::sync::Lazy;
 
 macro_rules! invalid_data_error {
     ($($arg:tt)*) => {{
-        Err(io::Error::new(
+        Err(invalid_data!($($arg)*))
+    }};
+}
+
+macro_rules! invalid_data {
+    ($($arg:tt)*) => {{
+        io::Error::new(
             io::ErrorKind::InvalidData,
             format!($($arg)*),
-        ))
+        )
     }};
 }
 
