@@ -67,27 +67,30 @@ impl CollapsePrivate for Folder {
                 .find(|n| n.has_tag_name("backtrace"))
                 .ok_or(invalid_data!("Unable find backtrace"))?;
             debug!("{backtrace:?}");
-            let function_name = backtrace
+            if let Some(function_name) = backtrace
                 .attribute("fmt")
                 .and_then(|s| s.split_once(' '))
                 .map(|s| s.0)
-                .ok_or(invalid_data!("Unable find function name"))?;
-            debug!("function_name: {function_name:?}");
-            // for some unknown reasons there are sometimes multiple stacks, for now keep the longest
-            let mut longest_stack_opt = None;
-            for stack in backtrace
-                .descendants()
-                .filter(|n| n.has_tag_name("text-addresses"))
             {
-                if let Some(lstack) = longest_stack_opt {
-                    if node_len(stack)? > node_len(lstack)? {
-                        longest_stack_opt = Some(stack)
+                debug!("function_name: {function_name:?}");
+                // for some unknown reasons there are sometimes multiple stacks, for now keep the longest
+                let mut longest_stack_opt = None;
+                for stack in backtrace
+                    .descendants()
+                    .filter(|n| n.has_tag_name("text-addresses"))
+                {
+                    if let Some(lstack) = longest_stack_opt {
+                        if node_len(stack)? > node_len(lstack)? {
+                            longest_stack_opt = Some(stack)
+                        }
                     }
                 }
-            };
-           	let longest_stack = longest_stack_opt.and_then(|n| n.text()).ok_or(invalid_data!("No stack"))?;
-           	let stack_str = longest_stack.replace(" ", ";") + ";" + function_name;
-           	occurrences.insert_or_add(stack_str, 1);
+                // in case there is no stack we pass, so sure if it's sound behavior
+                if let Some(longest_stack) = longest_stack_opt.and_then(|n| n.text()) {
+                    let stack_str = longest_stack.replace(" ", ";") + ";" + function_name;
+                    occurrences.insert_or_add(stack_str, 1);
+                }
+            }
         })
     }
 }
