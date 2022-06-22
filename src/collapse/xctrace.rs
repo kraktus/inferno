@@ -1,4 +1,4 @@
-use log::debug;
+use log::{debug, trace};
 use std::io::{self, prelude::*};
 
 use crate::collapse::common::{self, CollapsePrivate, Occurrences};
@@ -55,18 +55,30 @@ impl CollapsePrivate for Folder {
     where
         R: io::BufRead,
     {
-        Ok(for line_res in reader.lines() {
+        for line_res in reader.lines() {
             let line = line_res?;
-            let doc = roxmltree::Document::parse(&line).or_else(|e| {
-                invalid_data_error!("Failed to parse XML row: {}, error: {}", line, e)
-            })?;
-            debug!("{doc:?}");
-            debug!("{:?}", doc.descendants());
+            let doc = match roxmltree::Document::parse(&line) {
+                Ok(doc) => doc,
+                Err(e) => {
+                    // last line of the file
+                    if line == "</node></trace-query-result>" {
+                        return Ok(());
+                    } else {
+                        return invalid_data_error!(
+                            "Failed to parse XML row: {}, error: {}",
+                            line,
+                            e
+                        );
+                    }
+                }
+            };
+            trace!("{doc:?}");
+            trace!("{:?}", doc.descendants());
             let backtrace = doc
                 .descendants()
                 .find(|n| n.has_tag_name("backtrace"))
                 .ok_or(invalid_data!("Unable find backtrace"))?;
-            debug!("{backtrace:?}");
+            trace!("{backtrace:?}");
             if let Some(function_name) = backtrace
                 .attribute("fmt")
                 .and_then(|s| s.split_once(' '))
@@ -80,26 +92,30 @@ impl CollapsePrivate for Folder {
                     .filter(|n| n.has_tag_name("text-addresses"))
                 {
                     if let Some(lstack) = longest_stack_opt {
-                        if node_len(stack)? > node_len(lstack)? {
+                        if node_len(stack) > node_len(lstack) {
                             longest_stack_opt = Some(stack)
                         }
+                    } else {
+                        longest_stack_opt = Some(stack)
                     }
                 }
                 // in case there is no stack we pass, so sure if it's sound behavior
+                debug!("longest_stack_opt = {:?}", longest_stack_opt);
                 if let Some(longest_stack) = longest_stack_opt.and_then(|n| n.text()) {
                     let stack_str = longest_stack.replace(" ", ";") + ";" + function_name;
                     occurrences.insert_or_add(stack_str, 1);
                 }
             }
-        })
+        }
+        debug!("occurrences: {occurrences:?}");
+        Ok(())
     }
 }
 
 #[inline]
-fn node_len(n: roxmltree::Node) -> io::Result<usize> {
+fn node_len(n: roxmltree::Node) -> usize {
     n.text()
-        .ok_or(invalid_data!("No stack"))
-        .map(|text| text.len())
+        .map(|text| text.len()).unwrap_or(0)
 }
 
 impl Default for Folder {
