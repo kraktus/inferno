@@ -55,6 +55,9 @@ impl CollapsePrivate for Folder {
     where
         R: io::BufRead,
     {
+        // when the sample does not contain all the information required, it means
+        // it is identical to the last proper Sample
+        let mut last_sample: Option<Sample> = None;
         for line_res in reader.lines() {
             let line = line_res?;
             let doc = match roxmltree::Document::parse(&line) {
@@ -74,48 +77,92 @@ impl CollapsePrivate for Folder {
             };
             trace!("{doc:?}");
             trace!("{:?}", doc.descendants());
-            let backtrace = doc
-                .descendants()
-                .find(|n| n.has_tag_name("backtrace"))
-                .ok_or(invalid_data!("Unable find backtrace"))?;
-            trace!("{backtrace:?}");
-            if let Some(function_name) = backtrace
-                .attribute("fmt")
-                .and_then(|s| s.split_once(' '))
-                .map(|s| s.0)
-            {
-                debug!("function_name: {function_name:?}");
-                // for some unknown reasons there are sometimes multiple stacks, for now keep the longest
-                let mut longest_stack_opt = None;
-                for stack in backtrace
-                    .descendants()
-                    .filter(|n| n.has_tag_name("text-addresses"))
-                {
-                    if let Some(lstack) = longest_stack_opt {
-                        if node_len(stack) > node_len(lstack) {
-                            longest_stack_opt = Some(stack)
-                        }
-                    } else {
-                        longest_stack_opt = Some(stack)
-                    }
-                }
-                // in case there is no stack we pass, so sure if it's sound behavior
-                debug!("longest_stack_opt = {:?}", longest_stack_opt);
-                if let Some(longest_stack) = longest_stack_opt.and_then(|n| n.text()) {
-                    let stack_str = longest_stack.replace(" ", ";") + ";" + function_name;
-                    occurrences.insert_or_add(stack_str, 1);
-                }
-            }
+            let sample = Sample::new(doc)
+                .or_else(|| last_sample.clone())
+                .ok_or(invalid_data!(
+                    "Current sample not valid, and no previous sample stored"
+                ))?;
+            last_sample = Some(sample.clone());
+            occurrences.insert_or_add(sample.call_stack, 1);
+            // let backtrace = doc
+            //     .descendants()
+            //     .find(|n| n.has_tag_name("backtrace"))
+            //     .ok_or(invalid_data!("Unable find backtrace"))?;
+            // trace!("{backtrace:?}");
+            // if let Some(function_name) = backtrace
+            //     .attribute("fmt")
+            //     .and_then(|s| s.split_once(' '))
+            //     .map(|s| s.0.to_string())
+            //     .or_else(|| last_function_name.clone())
+            // {
+            //     last_function_name = Some(function_name.clone());
+            //     debug!("function_name: {function_name:?}");
+            //     // for some unknown reasons there are sometimes multiple stacks, for now keep the longest
+            //     let mut longest_stack_opt = None;
+            //     for stack in backtrace
+            //         .descendants()
+            //         .filter(|n| n.has_tag_name("text-addresses"))
+            //     {
+            //         if let Some(lstack) = longest_stack_opt {
+            //             if node_len(stack) > node_len(lstack) {
+            //                 longest_stack_opt = Some(stack)
+            //             }
+            //         } else {
+            //             longest_stack_opt = Some(stack)
+            //         }
+            //     }
+            //     // in case there is no stack we pass, sot sure if it's sound behavior
+            //     debug!("longest_stack_opt = {:?}", longest_stack_opt);
+            //     if let Some(longest_stack) = longest_stack_opt.and_then(|n| n.text()) {
+            //         let stack_str = longest_stack.replace(" ", ";") + ";" + &function_name;
+            //         occurrences.insert_or_add(stack_str, 1);
+            //     }
+            // }
         }
         debug!("occurrences: {occurrences:?}");
         Ok(())
     }
 }
 
+#[derive(Debug, Clone)]
+struct Sample {
+    function_name: String,
+    pub call_stack: String,
+}
+
+impl Sample {
+    pub fn new(doc: roxmltree::Document) -> Option<Self> {
+        let backtrace = doc.descendants().find(|n| n.has_tag_name("backtrace"))?;
+        trace!("{backtrace:?}");
+        let function_name = backtrace.attribute("fmt")?.split_once(' ')?.0.to_string();
+        debug!("function_name: {function_name:?}");
+        // for some unknown reasons there are sometimes multiple stacks, for now keep the longest
+        let mut longest_stack_opt = None;
+        for stack in backtrace
+            .descendants()
+            .filter(|n| n.has_tag_name("text-addresses"))
+        {
+            if let Some(lstack) = longest_stack_opt {
+                if node_len(stack) > node_len(lstack) {
+                    longest_stack_opt = Some(stack)
+                }
+            } else {
+                longest_stack_opt = Some(stack)
+            }
+        }
+        // in case there is no stack we pass, sot sure if it's sound behavior
+        debug!("longest_stack_opt = {:?}", longest_stack_opt);
+        let call_stack = longest_stack_opt?.text()?.replace(" ", ";") + ";" + &function_name;
+        Some(Self {
+            function_name,
+            call_stack,
+        })
+    }
+}
+
 #[inline]
 fn node_len(n: roxmltree::Node) -> usize {
-    n.text()
-        .map(|text| text.len()).unwrap_or(0)
+    n.text().map(|text| text.len()).unwrap_or(0)
 }
 
 impl Default for Folder {
